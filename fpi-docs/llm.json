@@ -1,0 +1,37 @@
+{
+  "description": "FPI-Corp shared LLM — all agents (Lisa, Alex, Scout, Ryan, Atlas, Blake)",
+  "provider": "xai-oauth-via-hermes-proxy",
+  "model": "grok-4.20-reasoning",
+  "model_aliases_accepted": [
+    "grok-4.20-reasoning",
+    "grok-4.20",
+    "grok-4.20-reasoning-latest",
+    "grok-4.20-0309-reasoning"
+  ],
+  "openai_compatible": {
+    "base_url": "http://127.0.0.1:8645/v1",
+    "api_key_env": "FPI_LLM_API_KEY",
+    "api_key_note": "Any non-empty bearer; Hermes proxy attaches real SuperGrok OAuth. Prefer reading FPI_LLM_API_KEY from data/xai_access_token or literal 'hermes-proxy'."
+  },
+  "direct_xai": {
+    "base_url": "https://api.x.ai/v1",
+    "api_key_file": "/home/shanem/FPI-Corp/data/xai_access_token",
+    "note": "Re-read token file every request; OAuth JWTs rotate (~6h). Prefer proxy when local."
+  },
+  "hermes": {
+    "auth": "~/.hermes/auth.json providers.xai-oauth",
+    "proxy_service": "hermes-proxy-xai.service",
+    "proxy_port": 8645,
+    "oauth_refresh_timer": "hermes-oauth-refresh.timer"
+  },
+  "elevenlabs_custom_llm": {
+    "requirement": "Public HTTPS OpenAI-compatible base URL (127.0.0.1 not reachable from ElevenLabs cloud)",
+    "options": [
+      "Tunnel/reverse-proxy 8645 with auth (lab only)",
+      "ElevenLabs custom LLM → your public FPI bridge that uses local proxy",
+      "xAI console API key in ElevenLabs if OAuth proxy cannot be exposed"
+    ],
+    "model_id_to_set": "grok-4.20-reasoning"
+  },
+  "agents": ["Lisa", "Alex", "Scout", "Ryan", "Atlas", "Blake"]
+}

@@ -1,0 +1,217 @@
+MORGAN (document filename: morgen-ai-config.txt)
+How the agent is configured and how it works
+Written from live config on 192.168.1.191
+
+================================================================
+1. WHAT IT IS
+================================================================
+
+Morgan is the website receptionist for First Property Investment.
+
+She is an ElevenLabs Conversational AI agent. Visitors talk or type
+to her in the widget on firstpropertyinvestment.us.
+
+She is not Alex. Alex is a different ElevenLabs agent that owns the
+Twilio number +14233801566. Morgan has no phone number assigned.
+
+
+================================================================
+2. WHERE EACH PIECE RUNS
+================================================================
+
+ON ELEVENLABS.IO (their cloud)
+  - The agent definition (id, prompt, first message, voice, widget)
+  - Realtime speech-to-text (Scribe)
+  - Turn-taking / barge-in (VAD)
+  - Text-to-speech (voice output)
+  - The website widget itself (script + orb UI)
+  - Calling the take_lead webhook when she has a complete lead
+
+ON THIS SERVER (192.168.1.191)
+  - The website HTML that embeds the widget
+  - nginx reverse proxy
+  - The Grok brain (via Hermes SuperGrok login)
+  - Lead storage (SQLite + send.php inbox)
+  - Voice-picker page (LAN only)
+  - Optional desk test loop on port 8793
+
+NOT ON THIS SERVER
+  - The live conversation audio path for website visitors
+    (mic audio goes to ElevenLabs, not to :8793)
+
+
+================================================================
+3. LIVE IDS
+================================================================
+
+  Agent name     Morgan Receptionist
+  ElevenLabs id  agent_6201m06jgd6tf7arch24867h9a44
+  Voice          Matilda   XrExE9yKIg1WjnnlVkGX
+  Lead tool      tool_9001m06kr6khexntbkng5bgm6588   (take_lead)
+  Phone on Morgan   none
+
+
+================================================================
+4. WEBSITE VISITOR PATH (THE REAL PRODUCT)
+================================================================
+
+Browser
+  -> firstpropertyinvestment.us
+  -> index.html loads:
+       <elevenlabs-convai agent-id="agent_6201m06jgd6tf7arch24867h9a44">
+       plus the ElevenLabs widget script from unpkg
+
+Widget (top-right, voice + typed text)
+  -> ElevenLabs ConvAI session
+
+Inside that session, ElevenLabs does:
+
+  1. Hear the visitor
+       ASR: scribe_realtime  quality=high
+
+  2. Decide when they finished talking
+       ConvAI VAD / turn-taking
+
+  3. Think
+       llm = custom-llm
+       It does NOT use ElevenLabs' Gemini for Morgan.
+       It POSTs OpenAI-style chat completions to THIS server:
+
+         https://firstpropertyinvestment.us/api/reception/v1
+           /chat/completions
+
+       model_id: grok-4.20-reasoning
+       Authorization: Bearer <MORGAN_LLM_BEARER>
+         (a gate token we issued; not the Grok OAuth JWT)
+
+  4. Speak
+       TTS model: eleven_v3_conversational
+       voice_id:  XrExE9yKIg1WjnnlVkGX  (Matilda)
+       expressive_mode: true
+       enable_phoneme_tags: true
+
+  5. If she has name + phone + AI-call consent
+       POST take_lead webhook to THIS server
+         https://firstpropertyinvestment.us/api/reception/tools/take_lead
+         header X-Morgan-Tool-Secret
+
+
+================================================================
+5. WHAT THIS SERVER DOES WHEN ELEVENLABS CALLS IT
+================================================================
+
+nginx  /etc/nginx/sites-available/firstpropertyinvestment.us
+  /api/reception/  ->  127.0.0.1:8793/api/
+
+Local app
+  /opt/voice-receptionist
+  systemd: voice-receptionist.service
+  listen:  127.0.0.1:8793   (not public except through nginx)
+
+Grok bridge  POST /api/v1/chat/completions
+  1. Reject unless Authorization matches MORGAN_LLM_BEARER
+  2. Force model grok-4.20-reasoning
+  3. Forward to hermes-proxy-xai at 127.0.0.1:8645/v1/chat/completions
+  4. That proxy attaches Shane's Hermes xAI / SuperGrok OAuth
+     (same login Hermes uses). The rotating JWT never sits in
+     ElevenLabs.
+
+Lead webhook  POST /api/tools/take_lead
+  1. Reject unless X-Morgan-Tool-Secret matches
+  2. Write /opt/voice-receptionist/data/reception.db
+  3. POST the lead to /send.php as source=website_morgan
+     (email + leads-inbox jsonl)
+
+So: ears and mouth = ElevenLabs. Brain and CRM write = this host.
+
+
+================================================================
+6. HOW THE AGENT IS CONFIGURED (BEHAVIOR)
+================================================================
+
+Spoken system prompt (also stored on ElevenLabs as the agent prompt):
+  /opt/voice-receptionist/agents/morgan/morgan.voice.system.md
+
+Business facts / hours / voice id:
+  /opt/voice-receptionist/config/business.yaml
+
+Approved FAQ notes:
+  /opt/voice-receptionist/kb/faq.md
+
+First message (live on ElevenLabs):
+  "Hi, this is Morgan, the AI receptionist for First Property
+   Investment. We buy houses for cash as-is. How can I help you today?"
+
+LLM settings on the agent:
+  temperature 0.4
+  max_tokens  400
+  language    en
+
+Job:
+  Website receptionist. Answer cash-offer questions from approved
+  facts only. Take name, mobile, optional address, AI-call consent,
+  optional call window. Then take_lead so Alex or the team can call.
+
+Rules:
+  Identity is Morgan only. She is AI, not a human.
+  She is not Alex, does not book Ryan, does not invent prices/ARV.
+  1-2 sentences, one question at a time, no markdown.
+  Read back the phone number before submitting a lead.
+
+To change spoken behavior: edit morgan.voice.system.md then run
+  /opt/voice-receptionist/.venv/bin/python \
+    /opt/voice-receptionist/scripts/sync_morgan_website.py
+
+
+================================================================
+7. LOCAL DESK LOOP (OPTIONAL, NOT THE WEBSITE WIDGET)
+================================================================
+
+Same app on 127.0.0.1:8793 can do a full turn locally:
+
+  POST /api/loop/turn  (audio in)
+    STT: ElevenLabs API scribe_v2   (batch, on elevenlabs.io)
+    LLM: Grok via 127.0.0.1:8645    (local proxy)
+    TTS: ElevenLabs API flash v2.5  (on elevenlabs.io)
+
+This is a test bench. Website visitors do not use it.
+
+
+================================================================
+8. VOICE PICKER (LOCAL PAGE, ELEVENLABS VOICES)
+================================================================
+
+  http://192.168.1.191/morgan-studio.html
+  or http://www.firstpropertyinvestment.us/morgan-studio.html
+
+  iframe -> /morgan-studio/ -> local :8793/studio/
+  Lists female high-quality voices from the ElevenLabs account
+  already on this server. Choosing one PATCHes Morgan's voice_id
+  on elevenlabs.io. LAN only. Does not ask for an API key.
+
+
+================================================================
+9. SECRETS AND CONFIG FILES (NO VALUES HERE)
+================================================================
+
+  /opt/voice-receptionist/.env                 mode 600
+  /opt/voice-receptionist/data/MORGAN_LLM_BEARER
+  /opt/voice-receptionist/data/MORGAN_TOOL_SECRET
+
+  ELEVENLABS_API_KEY is the same product key as /opt/fpi-voice/.env
+
+
+================================================================
+10. WHAT RUNS WHERE — ONE LINE EACH
+================================================================
+
+  Widget UI              elevenlabs.io (script on the page)
+  Mic / STT              elevenlabs.io  scribe_realtime
+  Turn-taking            elevenlabs.io
+  Voice / TTS            elevenlabs.io  eleven_v3_conversational
+  Agent prompt storage   elevenlabs.io  (copy also on disk here)
+  Thinking (Grok)        this server    hermes-proxy-xai :8645
+  Lead save              this server    :8793 + send.php
+  Website HTML           this server    /var/www/firstpropertyinvestment.us
+  nginx                  this server    :80 (and :443 on LAN)
+  Phone calls            not Morgan     Alex only
